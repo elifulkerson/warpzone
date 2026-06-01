@@ -1,0 +1,270 @@
+.\" Manpage for warpzone.
+.\" Contact: elifulkerson@gmail.com
+.TH WARPZONE 1 "June 2026" "warpzone 0.3.0" "User Commands"
+.SH NAME
+warpzone \- seamless PTY wrapper with on-demand output capture and local pipeline
+.SH SYNOPSIS
+.B warpzone
+.RI [ options ]
+.SH DESCRIPTION
+.B warpzone
+launches an interactive shell (or any other program) inside a pseudo-terminal
+(PTY) and acts as a transparent terminal shim in front of it. Under normal
+operation you type and see output as usual (this is called
+.BR PASSTHRU " mode)."
+.PP
+At any time \(em except while the child is using the alternate screen buffer \(em
+you can press
+.B Ctrl-]
+to enter a local mini-editor
+.RB ( PIPE_ENTRY
+mode) and type a shell pipeline, for example
+.IR "grep foo | wc -l" .
+Pressing
+.B Enter
+commits the pipeline:
+.B warpzone
+sends Enter to the child program, captures the child's output for a short
+window
+.RB ( CAPTURE
+mode), and then feeds that captured output into your pipeline, which is executed
+.B on the local machine
+via
+.IR "/bin/sh -c" .
+.PP
+This is useful for post-processing the output of a program whose environment
+lacks your local tools \(em a remote
+.BR ssh (1)
+session, a serial console, a container, or a restricted appliance shell \(em
+using the utilities installed on the local host.
+.PP
+The captured output is written to an anonymous temporary file under
+.IR /tmp ,
+created with
+.BR mkstemp (3)
+and immediately unlinked, so it does not persist after the pipeline finishes.
+.SH MODES
+.TP
+.B PASSTHRU
+Normal operation. Keystrokes are forwarded to the child; the child's output is
+printed to the screen.
+.TP
+.B PIPE_ENTRY
+Entered with
+.BR Ctrl-] .
+A green
+.RB \(lq | \(rq
+marker is shown and keystrokes are buffered locally to build a pipeline. Nothing
+is sent to the child until the pipeline is committed.
+.TP
+.B CAPTURE
+Entered when a non-empty pipeline is committed with
+.BR Enter .
+The child's output is recorded silently while a dim status overlay (byte count,
+idle time, capture age, end mode, and a throughput sparkline) is drawn on the
+last terminal row.
+.SH INTERACTIVE KEYS
+.TP
+.B Ctrl-] " (in PASSTHRU)"
+Enter PIPE_ENTRY; prints a green
+.RB \(lq | \(rq.
+.TP
+.IR printable " (in PIPE_ENTRY)"
+Append the character to the local pipeline.
+.TP
+.B Backspace " (in PIPE_ENTRY)"
+Erase one character; backspacing over the marker cancels PIPE_ENTRY.
+.TP
+.B Enter " (in PIPE_ENTRY)"
+Commit the pipeline: send Enter to the child and begin CAPTURE. Committing an
+empty pipeline simply leaves PIPE_ENTRY.
+.TP
+.BR Ctrl-C ", " Ctrl-] " (in PIPE_ENTRY)"
+Cancel PIPE_ENTRY and return to PASSTHRU.
+.TP
+.B Ctrl-] " (in CAPTURE)"
+End capture immediately and run the pipeline.
+.SH CAPTURE END CONDITIONS
+While capturing, recording stops at the first of:
+.TP
+.B Quiet gap (default)
+No PTY output for
+.B --gap-ms
+milliseconds (default 200).
+.TP
+.B Manual end
+.B Ctrl-]
+is pressed.
+.TP
+.B Byte guardrail
+.B --max-bytes
+bytes have been captured (disabled by default).
+.TP
+.B Time guardrail
+.B --max-seconds
+have elapsed since capture began (disabled by default).
+.PP
+Use
+.B --manual-end
+to disable the quiet-gap heuristic, so capture ends only via
+.B Ctrl-]
+or a guardrail.
+.SH OPTIONS
+.TP
+.BI --shell " PATH"
+Program to exec inside the PTY. Default:
+.IR /bin/bash .
+.TP
+.BI --shell-arg " ARG"
+Add an argument for the PTY child program. May be repeated. If no
+.B --shell-arg
+is given,
+.B warpzone
+adds
+.B -i
+by default for an interactive shell.
+.TP
+.BI --gap-ms " N"
+Quiet-gap in milliseconds to end capture. Default 200;
+.B 0
+disables gap-ending.
+.TP
+.B --manual-end
+Disable quiet-gap ending. Capture then ends only via
+.B Ctrl-]
+or a guardrail.
+.TP
+.BI --max-bytes " N"
+End capture after
+.I N
+bytes have been captured.
+.B 0
+disables (default).
+.TP
+.BI --max-seconds " N"
+End capture after
+.I N
+seconds.
+.B 0
+disables (default).
+.TP
+.BR --version ", " -V
+Print version and exit.
+.TP
+.BR --help ", " -h
+Show help and exit.
+.PP
+Command-line options override values loaded from the configuration file.
+.SH CONFIGURATION FILE
+If present,
+.I ~/.warpzonerc
+is read at startup, before command-line arguments are parsed; command-line
+options therefore take precedence.
+.PP
+The file is UTF-8 text with one
+.IR key = value
+setting per line. Whitespace around keys and values is tolerated, blank lines
+are ignored, and lines beginning with
+.RB \(lq # \(rq
+are comments.
+.PP
+Supported keys:
+.TP
+.B shell
+(string) Path to the PTY child program, e.g.\&
+.IR /bin/zsh .
+.TP
+.B shell_arg
+(string) Adds one argument; repeat the line for multiple arguments.
+.TP
+.B gap_ms
+(int \(>= 0) Quiet-gap end condition in milliseconds.
+.TP
+.B manual_end
+(bool)
+.IR true / false / yes / no / on / off / 1 / 0 .
+.TP
+.B max_bytes
+(int \(>= 0) Capture size guardrail in bytes.
+.TP
+.B max_seconds
+(int \(>= 0) Capture time guardrail in seconds.
+.PP
+Example:
+.PP
+.RS
+.nf
+# Use zsh and disable gap-ending
+shell=/bin/zsh
+shell_arg=-i
+manual_end=true
+max_seconds=10
+max_bytes=1048576
+.fi
+.RE
+.SH SIGNALS AND JOB CONTROL
+In PASSTHRU mode,
+.BR SIGINT ", " SIGQUIT ", " SIGTERM ", " SIGHUP ", " SIGTSTP ", and " SIGCONT
+are caught by
+.B warpzone
+and forwarded to the PTY foreground process group, so
+.BR Ctrl-C ", " Ctrl-Z ,
+and job control behave as in a normal terminal. Window-size changes
+.RB ( SIGWINCH )
+are propagated to the child. In PIPE_ENTRY and CAPTURE, these signals are
+dropped so they do not surprise the child.
+.SH NOTES AND LIMITATIONS
+.IP \(bu 2
+PIPE_ENTRY is disabled while the child is in the alternate screen buffer (e.g.\&
+.BR vim (1),
+.BR less (1),
+.BR top (1)),
+because injecting a visible marker into a full-screen app is disruptive. In that
+state,
+.B Ctrl-]
+beeps and prints a notice; exit the full-screen app first.
+.IP \(bu 2
+During CAPTURE, normal keystrokes are ignored; only
+.B Ctrl-]
+(to end capture) is honored.
+.IP \(bu 2
+The status overlay and sparkline use Unicode block glyphs, so a UTF-8-capable
+terminal is recommended.
+.SH EXAMPLES
+.TP
+Wrap the default interactive bash:
+.B warpzone
+.TP
+Wrap a remote session and filter its output with local tools:
+.B warpzone --shell /usr/bin/ssh --shell-arg user@host
+.TP
+Use zsh with a longer quiet-gap:
+.B warpzone --shell /bin/zsh --gap-ms 500
+.TP
+Capture a long-running command, ending manually but capped at 30 seconds:
+.B warpzone --manual-end --max-seconds 30
+.SH FILES
+.TP
+.I ~/.warpzonerc
+Optional configuration file (see CONFIGURATION FILE).
+.TP
+.I /tmp/warpzoneXXXXXX
+Anonymous temporary capture file, unlinked immediately after creation.
+.SH EXIT STATUS
+.B warpzone
+exits 0 after the child program exits normally, and a non-zero status on a
+fatal startup error (for example, failure to allocate a PTY).
+.SH SECURITY
+The pipeline typed in PIPE_ENTRY is executed locally via
+.IR "/bin/sh -c" ,
+with the captured child output supplied on its standard input. Captured output
+is treated as data on stdin and is not interpreted as a shell command, but the
+pipeline itself is your own command line, so the usual care with shell
+metacharacters applies.
+.SH SEE ALSO
+.BR ssh (1),
+.BR script (1),
+.BR tmux (1),
+.BR sh (1)
+.SH AUTHOR
+Eli Fulkerson <elifulkerson@gmail.com>
